@@ -1,6 +1,13 @@
+from functools import lru_cache
 from fastapi import FastAPI
 
+from .config import Settings
+
 app = FastAPI()
+
+@lru_cache
+def get_settings():
+    return Settings()
 
 @app.get("/")
 async def root():
@@ -8,4 +15,6 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": get_settings().ok_message}
+
+
