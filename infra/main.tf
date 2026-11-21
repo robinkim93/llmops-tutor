@@ -35,6 +35,11 @@ resource "aws_lambda_function" "llmops_tutor_lambda_function" {
   role          = aws_iam_role.llmops_tutor_lambda_role.arn # 함수 실행 시 사용할 권한
   package_type  = "Image"                                   # docker기 때문에 image, 기본으로 두면 zip으로 설정됨
   image_uri     = "${aws_ecr_repository.llmops_tutor.repository_url}:${var.image_tag}"
+  environment {
+    variables = {
+      OK_MESSAGE = "ok"
+    }
+  }
   architectures = ["x86_64"] # Github actions에서 빌드했기 때문에
   timeout       = 30         # 호출 시간 초과 시간 설정
   memory_size   = 512        # 메모리 크기
@@ -42,3 +47,22 @@ resource "aws_lambda_function" "llmops_tutor_lambda_function" {
     aws_iam_role_policy_attachment.llmops_tutor_lambda_role_policy, aws_cloudwatch_log_group.llmops_tutor_lambda_log_group
   ]
 }
+
+resource "aws_lambda_function_url" "llmops_tutor_lambda_function_url" {
+  function_name      = aws_lambda_function.llmops_tutor_lambda_function.function_name
+  authorization_type = "NONE"
+}
+
+resource "aws_lambda_permission" "llmops_tutor_lambda_function_permission" {
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.llmops_tutor_lambda_function.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+output "llmops_tutor_lambda_function_url" {
+  description = "llmops tutor lambda function url"
+  value       = aws_lambda_function_url.llmops_tutor_lambda_function_url.function_url
+}
+
+
