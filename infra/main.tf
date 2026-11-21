@@ -26,6 +26,19 @@ resource "aws_iam_role_policy_attachment" "llmops_tutor_lambda_role_policy" {   
 }
 
 resource "aws_cloudwatch_log_group" "llmops_tutor_lambda_log_group" {
-  name              = "/aws/lambda/llmops-tutor-lambda-function"
-  retention_in_days = 7
+  name              = "/aws/lambda/llmops-tutor-lambda-function" # 로그 그룹 이름 (람다 함수명과 똑같이 해야 나중에 생성될 람다 함수가 로그 그룹을 정상적으로 찾아감)
+  retention_in_days = 7                                          # 로그 보존 일수
+}
+
+resource "aws_lambda_function" "llmops_tutor_lambda_function" {
+  function_name = "llmops-tutor-lambda-function"            # 람다 함수 이름
+  role          = aws_iam_role.llmops_tutor_lambda_role.arn # 함수 실행 시 사용할 권한
+  package_type  = "Image"                                   # docker기 때문에 image, 기본으로 두면 zip으로 설정됨
+  image_uri     = "${aws_ecr_repository.llmops_tutor.repository_url}:${var.image_tag}"
+  architectures = ["x86_64"] # Github actions에서 빌드했기 때문에
+  timeout       = 30         # 호출 시간 초과 시간 설정
+  memory_size   = 512        # 메모리 크기
+  depends_on = [             # 명시된 것들이 정상적으로 생성됨을 확인한 후 람다 함수를 생성함
+    aws_iam_role_policy_attachment.llmops_tutor_lambda_role_policy, aws_cloudwatch_log_group.llmops_tutor_lambda_log_group
+  ]
 }
