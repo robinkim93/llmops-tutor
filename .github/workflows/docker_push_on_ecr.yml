@@ -1,5 +1,6 @@
 name: Push to ECR                                                           # 해당 작업의 이름
 on:                                                                         # 언제 작업을 시작하는지
+  workflow_dispatch:                                                        # 사람이 눌러도 실행되게
   push:                                                                     # 푸시될 때
     branches:                                                               # 어떤 브랜치에 푸시 될 때인지
       - main                                                                # main 브랜치에 푸시 될 때 해당 작업 실행
@@ -35,7 +36,7 @@ jobs:                                                                       # �
             ECR_REPO: ${{ steps.ecr.outputs.registry }}/llmops-tutor-repository
             TAG: ${{ github.sha }}                                          # 이번 실행을 일으킨 커밋 번호 (이것을 자동화 하기 위해 해당 ci/cd를 만듦)
           run: |                                                            # 아래의 여러 줄을 한 줄씩 차례로 실행하라는 명령어 (루트 경로의 Dockerfile을 활용해 REPO:TAG 명으로 이미지를 만들고, 그 이름의 이미지를 ecr에 Push)
-            docker build -t $ECR_REPO:$TAG .
+            docker build -t $ECR_REPO:$TAG --provenance=false .
             docker push $ECR_REPO:$TAG
           
         
