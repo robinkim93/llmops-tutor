@@ -197,7 +197,7 @@
   - 워크플로의 `paths`에 `infra/**`를 넣어, 인프라만 바뀐 커밋에서도 검사·빌드·push·apply가 전부 돈다. 이때 이미지는 내용이 같고 태그만 새로 붙는다. 수동 실행(`workflow_dispatch`)에만 맡기면 잊었을 때 코드와 AWS가 달라져서 고르지 않았다.
   - `concurrency`로 실행이 겹치면 앞의 것이 끝날 때까지 기다리게 했다(`cancel-in-progress: false`). 동시에 apply하면 나중 것이 S3 잠금에 막혀 실패하고, 앞의 것을 취소하면 잠금 파일이 남을 수 있기 때문이다.
   - 콘솔에서 손으로 바꾼 설정은 다음 apply 때 코드대로 되돌아간다.
-- 상태: 진행 중 (워크플로에 job 추가, 아직 동작 확인 전)
+- 상태: 적용됨 (2026-11-22 첫 실행 성공. lambda-function-update job이 `0 added, 1 changed, 0 destroyed`로 람다 이미지와 CPU 종류를 바꿨다)
 
 ### 12. Terraform 상태 파일을 S3에 둔다
 
@@ -229,7 +229,7 @@
 - 주의할 점
   - `"1.17.2"`처럼 버전 하나로 적을 때만 맞게 돈다. `">= 1.17"` 같은 범위로 바꾸면 그 글자가 통째로 뽑혀 설치가 실패한다.
   - AWS provider 버전은 `.terraform.lock.hcl`이 고정한다. 이 파일은 git에 올려 둔다.
-- 상태: 진행 중 (워크플로에 넣음, 동작 확인 전)
+- 상태: 적용됨 (2026-11-22 GitHub Actions에서 `setup-terraform@v4`로 1.17.2 설치를 확인)
 
 ### 14. 람다 CPU 종류는 x86_64 — 이미지를 GitHub Actions에서 빌드하기 때문
 
@@ -244,4 +244,34 @@
 - 주의할 점
   - 이미지 CPU 종류는 `docker buildx imagetools inspect <주소> --format '{{.Image.Architecture}}'`로, 람다 쪽은 `aws lambda get-function-configuration --query Architectures`로 확인한다. `amd64`와 `x86_64`는 같은 것이다.
   - 나중에 터미널(애플 칩 Mac)에서 빌드할 일이 생기면 `--platform linux/amd64`를 붙여야 한다.
-- 상태: 코드 수정됨 (apply와 다시 호출해 확인하는 것은 아직)
+- 상태: 적용됨 (2026-11-22 CI apply 뒤 람다가 `x86_64`로 바뀌고, 로그에서 Web Adapter `State: Ready`와 FastAPI 시작을 확인)
+
+### 15. 함수 URL은 인증 없이(`NONE`) 연다
+
+- 날짜: 2026-11-22
+- 출처: 사용자 결정
+- 결정: `aws_lambda_function_url`을 `authorization_type = "NONE"`으로 만들고, `aws_lambda_permission`으로 누구나(`principal = "*"`) 함수 URL을 호출할 수 있게 허락한다. 주소는 `output`으로 apply 끝에 찍는다.
+- 이유
+  - 과제 결과를 브라우저나 `curl`로 바로 열어 보여 줄 수 있다.
+  - Terraform으로 함수 URL을 만들면 콘솔과 달리 호출 허락이 자동으로 붙지 않는다. 허락이 없으면 `403 Forbidden`이 난다.
+- 고르지 않은 선택지
+  - `AWS_IAM`: AWS 서명이 붙은 요청만 받아 안전하지만, 브라우저로 바로 열 수 없다. 13주차에 다른 사용자가 쓰기 전, 로그인을 붙일 때 다시 정한다.
+- 주의할 점
+  - 주소를 아는 누구나 부를 수 있다. LLM을 붙이면(과제 2) 호출마다 비용이 생기므로, 그 전에 `reserved_concurrent_executions`(동시 실행 상한)와 예산 알림을 건다.
+  - 공개 함수 URL에는 `lambda:InvokeFunctionUrl` 외에 `lambda:InvokeFunction` 허락(`invoked_via_function_url = true`)도 필요할 수 있다. 하나만 붙였는데 403이 나면 이것부터 확인한다.
+- 상태: 진행 중 (코드 작성, apply 전)
+
+### 16. `OK_MESSAGE`는 코드 기본값과 람다 환경 변수 두 곳에 둔다
+
+- 날짜: 2026-11-22
+- 출처: 사용자 결정 — 람다 환경 변수가 비어 있어 `/health`가 실패할 것이라는 점검 결과에 대한 조치
+- 결정
+  - `config.py`의 `ok_message`에 기본값 `"ok"`를 준다.
+  - `aws_lambda_function`의 `environment.variables`에 `OK_MESSAGE = "ok"`를 넣는다.
+- 이유
+  - `.env`는 `.dockerignore`에 있어 이미지에 들어가지 않는다. 기본값이 없으면 람다에서 설정을 읽는 순간 오류가 난다.
+  - 값을 람다 환경 변수로 두면, 6번(설정은 이미지 밖에)대로 이미지를 다시 만들지 않고 값만 바꿀 수 있다.
+- 주의할 점
+  - 코드에 기본값이 생겨서, 환경 변수를 빠뜨려도 오류 없이 `"ok"`로 돈다. 나중에 API 키처럼 반드시 있어야 하는 값에는 기본값을 주지 않는다. 빠졌을 때 바로 실패해야 알아챌 수 있다.
+  - 지금은 `OK_MESSAGE`가 비밀값이 아니라 `.tf`에 그대로 적었다. 비밀값은 3번대로 SSM Parameter Store에 둔다.
+- 상태: 진행 중 (코드 작성, apply 전)
