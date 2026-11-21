@@ -9,6 +9,10 @@ on:                                                                         # �
     - src/**                                                                # 내부 소스코드
     - pyproject.toml                                                        # 프로젝트 정보와 의존성 파일
     - uv.lock                                                               # 설치되는 라이브러리의 실제 버전이 담긴 파일
+    - infra/**
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 jobs:                                                                       # 실제로 동작하는 동작
   test:                                                                     # test 라는 이름의 동작 방식을 정의
     runs-on: ubuntu-latest                                                  # ubuntu를 잠시 빌려서 실행
@@ -37,7 +41,28 @@ jobs:                                                                       # �
             TAG: ${{ github.sha }}                                          # 이번 실행을 일으킨 커밋 번호 (이것을 자동화 하기 위해 해당 ci/cd를 만듦)
           run: |                                                            # 아래의 여러 줄을 한 줄씩 차례로 실행하라는 명령어 (루트 경로의 Dockerfile을 활용해 REPO:TAG 명으로 이미지를 만들고, 그 이름의 이미지를 ecr에 Push)
             docker build -t $ECR_REPO:$TAG --provenance=false .
-            docker push $ECR_REPO:$TAG
+            docker push $ECR_REPO:$TAG 
+  lambda-function-update:
+      needs: build-and-push
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v7
+        - uses: aws-actions/configure-aws-credentials@v6                    # 빌린 컴퓨터에서 AWS 권한을 사용할 수 있도록 하는 액션
+          with:                                                             # 위 액션이 실행되는데 필요한 값을 정의
+            aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+            aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            aws-region: ap-northeast-2
+        - id: terraform_version
+          run: echo "version=$(grep -oP 'required_version\s*=\s*"\K[^"]+' infra/terraform.tf)" >> "$GITHUB_OUTPUT"
+        - uses: hashicorp/setup-terraform@v4
+          with:
+            terraform_version: ${{ steps.terraform_version.outputs.version }}
+        - name: terraform init
+          working-directory: infra
+          run: terraform init
+        - name: terraform apply
+          working-directory: infra
+          run: terraform apply -auto-approve -var="image_tag=${{ github.sha }}"
           
         
   

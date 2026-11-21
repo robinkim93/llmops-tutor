@@ -177,3 +177,71 @@
   - 작업용 사용자는 넓은 권한으로 시작했다. GitHub 쪽에서 키가 새면 AWS 계정 거의 전체가 위험하다.
   - 과제 8(보안)에서 작업용 사용자의 권한을 좁히거나 CI 전용 사용자 또는 OIDC로 옮긴다.
 - 상태: 진행 중
+
+### 11. 람다 이미지 교체도 CI에서 `terraform apply`로 한다 — 태그는 `github.sha`
+
+- 날짜: 2026-11-21
+- 출처: 사용자 질문 — "var에 커밋 번호가 들어가야 하면 매번 손으로 넣어야 하지 않나?"
+- 결정: 첫 apply만 터미널에서 `-var="image_tag=<ECR에 있는 태그>"`로 하고, 이후에는 GitHub Actions가 빌드·push 뒤에 `terraform apply -auto-approve -var="image_tag=${{ github.sha }}"`를 실행한다.
+- 이유
+  - 태그는 워크플로가 매번 채워 넣으므로 사람이 적을 일이 없다.
+  - 넘긴 커밋 번호의 이미지가 정확히 배포되고, 되돌릴 때는 옛 커밋 번호를 넘기면 된다.
+  - apply는 바뀐 자원만 고친다. 코드만 바뀐 커밋이면 람다 함수의 `image_uri` 하나만 바뀐다.
+- 고르지 않은 선택지
+  - 이미지 교체만 `aws lambda update-function-code`로 하고 Terraform에는 `ignore_changes = [image_uri]`: CI 권한이 작아지지만, 상태 파일만 봐서는 지금 어떤 이미지가 걸려 있는지 알 수 없다. CI 권한을 좁힐 때(과제 8) 다시 본다.
+  - `data "aws_ecr_image"`에 `most_recent = true`로 최신 이미지를 자동 선택: var가 필요 없지만 어떤 커밋을 배포할지 정할 수 없고, 실수로 올린 이미지도 그대로 배포된다.
+- 주의할 점
+  - apply는 GitHub Actions에서만 한다. 터미널에서 apply하면 아직 빌드하지 않은 커밋 번호나 옛 번호가 들어가 이미지가 엉뚱하게 바뀔 수 있다. 터미널에서는 `plan`까지만 쓴다.
+  - 이미지 빌드와 apply는 같은 커밋 번호(`github.sha`, 40자)를 써야 한다. 한쪽만 짧은 번호를 쓰면 "이미지 없음"으로 실패한다.
+  - `-auto-approve`는 "정말 실행할까요?" 확인을 건너뛴다. 자원 이름을 바꾸는 실수가 있으면 묻지 않고 지우고 다시 만든다(ECR은 `force_delete = true`라 이미지까지 지워진다). push 전에 터미널에서 `terraform plan`을 돌려 본다.
+  - 워크플로의 `paths`에 `infra/**`를 넣어, 인프라만 바뀐 커밋에서도 검사·빌드·push·apply가 전부 돈다. 이때 이미지는 내용이 같고 태그만 새로 붙는다. 수동 실행(`workflow_dispatch`)에만 맡기면 잊었을 때 코드와 AWS가 달라져서 고르지 않았다.
+  - `concurrency`로 실행이 겹치면 앞의 것이 끝날 때까지 기다리게 했다(`cancel-in-progress: false`). 동시에 apply하면 나중 것이 S3 잠금에 막혀 실패하고, 앞의 것을 취소하면 잠금 파일이 남을 수 있기 때문이다.
+  - 콘솔에서 손으로 바꾼 설정은 다음 apply 때 코드대로 되돌아간다.
+- 상태: 진행 중 (워크플로에 job 추가, 아직 동작 확인 전)
+
+### 12. Terraform 상태 파일을 S3에 둔다
+
+- 날짜: 2026-11-21
+- 출처: 사용자 질문 — "지금 있는 tfstate 파일을 그냥 S3에 올리면 되지 않나?"
+- 결정: S3 버킷(`llmops-tutor-tfstate-<계정 번호>`, 버전 관리 켬)을 손으로 만들고, `infra/backend.tf`에 `backend "s3"`(`use_lockfile = true`)를 적은 뒤 `terraform init -migrate-state`로 로컬 상태 파일을 옮겼다.
+- 이유
+  - GitHub Actions는 매번 빈 컴퓨터에서 돈다. 상태 파일이 내 Mac에만 있으면 CI의 apply가 "아무것도 없다"고 보고 이미 있는 자원을 다시 만들려다 실패한다.
+  - `use_lockfile`로 두 곳에서 동시에 apply할 때 상태 파일이 꼬이지 않게 잠근다(Terraform 1.10부터 DynamoDB 없이 된다).
+  - 버전 관리를 켜 두면 상태 파일이 망가졌을 때 이전 버전으로 되돌릴 수 있다.
+- 고르지 않은 선택지
+  - `aws s3 cp`로 손으로 올린 뒤 `terraform init -reconfigure`: 결과는 같지만 올린 경로와 `key`를 손으로 맞춰야 하고, S3에 이미 파일이 있어도 묻지 않고 덮어쓴다.
+  - 상태 파일 버킷도 Terraform으로 만들기: 상태 파일을 저장할 곳을 만드는 코드가 그 저장할 곳을 필요로 해서 순서가 꼬인다.
+- 주의할 점
+  - `backend` 블록에는 변수를 쓸 수 없어 버킷 이름(계정 번호 포함)을 글자로 적었다. 저장소가 공개라 계정 번호가 드러난다.
+  - CI가 쓰는 IAM 권한에 이 버킷의 읽기·쓰기·목록·삭제(잠금 파일) 권한이 있어야 한다.
+  - apply 도중 강제로 끊기면 잠금 파일이 남는다. 다른 곳에서 apply가 돌고 있지 않은 것을 확인한 뒤 `terraform force-unlock <ID>`로 푼다.
+- 상태: 적용됨
+
+### 13. CI의 Terraform 버전은 `terraform.tf`에서 읽어 온다
+
+- 날짜: 2026-11-21
+- 출처: 사용자 제안 — "terraform.tf에 버전이 있는데 이걸 가져와서 CI에서 쓸 수 없나?"
+- 결정: 워크플로에서 `grep`으로 `required_version` 값을 뽑아 `hashicorp/setup-terraform`의 `terraform_version`에 넘긴다.
+- 이유: 버전을 올릴 때 `terraform.tf` 한 곳만 고치면 된다. `setup-terraform`은 `required_version`을 스스로 읽지 않는다.
+- 고르지 않은 선택지
+  - `.terraform-version` 파일을 따로 두기: 버전이 두 곳에 적혀 한쪽만 고치는 실수가 생긴다.
+  - `required_version`을 읽어 주는 외부 액션: 한 줄짜리 단계로 충분해 외부 코드를 들이지 않았다.
+- 주의할 점
+  - `"1.17.2"`처럼 버전 하나로 적을 때만 맞게 돈다. `">= 1.17"` 같은 범위로 바꾸면 그 글자가 통째로 뽑혀 설치가 실패한다.
+  - AWS provider 버전은 `.terraform.lock.hcl`이 고정한다. 이 파일은 git에 올려 둔다.
+- 상태: 진행 중 (워크플로에 넣음, 동작 확인 전)
+
+### 14. 람다 CPU 종류는 x86_64 — 이미지를 GitHub Actions에서 빌드하기 때문
+
+- 날짜: 2026-11-21
+- 출처: 사용자 질문 — 람다 호출 때 `Extension.LaunchError` / `ProcessSpawnFailed` 오류
+- 결정: `aws_lambda_function`의 `architectures`를 `["arm64"]`에서 `["x86_64"]`로 바꾼다.
+- 이유
+  - ECR의 이미지는 GitHub Actions(`ubuntu-latest`, x86_64)에서 빌드되어 `amd64`다. 이미지 안의 Lambda Web Adapter도 `amd64`용으로 들어간다.
+  - 람다를 arm64로 만들어 두어 Web Adapter가 시작조차 못 했다. 오류의 `Extension`은 `/opt/extensions/`에 넣은 Web Adapter를 가리킨다.
+- 고르지 않은 선택지
+  - 이미지를 arm64로 빌드하기: arm64 요금이 조금 싸지만 GitHub Actions에서 흉내 내기(에뮬레이션)로 빌드해 느려지거나 arm64 러너를 따로 지정해야 한다.
+- 주의할 점
+  - 이미지 CPU 종류는 `docker buildx imagetools inspect <주소> --format '{{.Image.Architecture}}'`로, 람다 쪽은 `aws lambda get-function-configuration --query Architectures`로 확인한다. `amd64`와 `x86_64`는 같은 것이다.
+  - 나중에 터미널(애플 칩 Mac)에서 빌드할 일이 생기면 `--platform linux/amd64`를 붙여야 한다.
+- 상태: 코드 수정됨 (apply와 다시 호출해 확인하는 것은 아직)
