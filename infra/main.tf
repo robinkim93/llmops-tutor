@@ -10,11 +10,36 @@ resource "aws_iam_role" "llmops_tutor_lambda_role" { # iam 역할을 llmops-tuto
     Version = "2012-10-17"                           # 최신 문법 버전임
     Statement = [                                    # 규칙 목록
       {
-        Action = "sts:AssumeRole"          # Security Token Service에 이 역할 빌려쓰기 요청하도록 함 (Effect, principal, action을 sts가 확인하고 임시 키를 람다에 발급)
-        Effect = "Allow"                   # 허락
-        Principal = {                      # 빌려 쓸 서비스 또는 계정을 작성함
-          Service = "lambda.amazonaws.com" # 이 프로젝트에서는 람다가 사용해야하기 때문에 람다를 써줌
+        Action = "sts:AssumeRole"            # Security Token Service에 이 역할 빌려쓰기 요청하도록 함 (Effect, principal, action을 sts가 확인하고 임시 키를 람다에 발급)
+        Effect = "Allow"                     # 허락
+        Principal = {                        # 빌려 쓸 서비스 또는 계정을 작성함
+          Service = ["lambda.amazonaws.com"] # 이 프로젝트에서는 람다가 사용해야하기 때문에 람다를 써줌
         }
+      }
+    ]
+  })
+}
+
+data "aws_region" "current_region" {
+}
+
+data "aws_caller_identity" "current_user" {
+}
+
+resource "aws_iam_policy" "llmops_tutor_ssm_policy" {
+  name = "llmops-tutor-ssm-policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "ssm:GetParameters"
+        ]
+        Effect = "Allow"
+        Resource = [
+          "arn:aws:ssm:${data.aws_region.current_region.region}:${data.aws_caller_identity.current_user.id}:parameter/llmops-tutor/claude_api_key",
+          "arn:aws:ssm:${data.aws_region.current_region.region}:${data.aws_caller_identity.current_user.id}:parameter/llmops-tutor/llm_call_password"
+        ]
       }
     ]
   })
@@ -23,6 +48,11 @@ resource "aws_iam_role" "llmops_tutor_lambda_role" { # iam 역할을 llmops-tuto
 resource "aws_iam_role_policy_attachment" "llmops_tutor_lambda_role_policy" {     # 어떤 역할에 어떤 정책을 붙일지 작성함 
   role       = aws_iam_role.llmops_tutor_lambda_role.name                         # 어떤 역할에
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" # 어떤 것을 할 수 있는지 정의된 정책을 작성
+}
+
+resource "aws_iam_role_policy_attachment" "llmops_tutor_ssm_role_policy" {
+  role       = aws_iam_role.llmops_tutor_lambda_role.name
+  policy_arn = aws_iam_policy.llmops_tutor_ssm_policy.arn
 }
 
 resource "aws_cloudwatch_log_group" "llmops_tutor_lambda_log_group" {
@@ -44,23 +74,25 @@ resource "aws_lambda_function" "llmops_tutor_lambda_function" {
   timeout       = 30         # 호출 시간 초과 시간 설정
   memory_size   = 512        # 메모리 크기
   depends_on = [             # 명시된 것들이 정상적으로 생성됨을 확인한 후 람다 함수를 생성함
-    aws_iam_role_policy_attachment.llmops_tutor_lambda_role_policy, aws_cloudwatch_log_group.llmops_tutor_lambda_log_group
+    aws_iam_role_policy_attachment.llmops_tutor_lambda_role_policy,
+    aws_iam_role_policy_attachment.llmops_tutor_ssm_role_policy,
+    aws_cloudwatch_log_group.llmops_tutor_lambda_log_group
   ]
 }
 
 resource "aws_lambda_function_url" "llmops_tutor_lambda_function_url" {
-  function_name      = aws_lambda_function.llmops_tutor_lambda_function.function_name
-  authorization_type = "NONE"
+  function_name      = aws_lambda_function.llmops_tutor_lambda_function.function_name # url에 접근했을 때 실행 될 함수
+  authorization_type = "NONE"                                                         # 아무나 들어올 수 있도록
 }
 
 resource "aws_lambda_permission" "llmops_tutor_lambda_function_permission" {
-  action                 = "lambda:InvokeFunctionUrl"
-  function_name          = aws_lambda_function.llmops_tutor_lambda_function.function_name
-  principal              = "*"
-  function_url_auth_type = "NONE"
+  action                 = "lambda:InvokeFunctionUrl"                                     #
+  function_name          = aws_lambda_function.llmops_tutor_lambda_function.function_name # 허용할 람다 함수
+  principal              = "*"                                                            # 아무나
+  function_url_auth_type = "NONE"                                                         # 아무나
 }
 
-output "llmops_tutor_lambda_function_url" {
+output "llmops_tutor_lambda_function_url" { # 터미널 출력용
   description = "llmops tutor lambda function url"
   value       = aws_lambda_function_url.llmops_tutor_lambda_function_url.function_url
 }
