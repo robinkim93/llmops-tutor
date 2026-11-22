@@ -53,6 +53,7 @@ jobs:                                                                       # ì‹
             aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
             aws-region: ap-northeast-2
         - id: terraform_version
+          name: "terraform version extract"
           run: echo "version=$(grep -oP 'required_version\s*=\s*"\K[^"]+' infra/terraform.tf)" >> "$GITHUB_OUTPUT"
         - uses: hashicorp/setup-terraform@v4
           with:
